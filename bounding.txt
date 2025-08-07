@@ -1,0 +1,512 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+import cv2
+from PIL import Image, ImageTk
+import os
+import glob
+import sys
+
+
+class ImageLabeler:
+
+    def __init__(self, root, selected_folder):
+        self.root = root
+        self.root.title("Image Labeling Tool")
+
+        # Make window resizable with initial size
+        self.root.geometry("1200x800")
+        self.root.resizable(True, True)
+        self.root.overrideredirect(False)
+
+        # Initialize variables
+        self.class_names = []
+        self.class_colors = {}
+        self.selected_class = None
+        self.image_index = 0
+        self.current_image = None
+        self.scale = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
+        self.bboxes = []
+        self.drawing = False
+        self.dragging_box = None
+        self.image_list = []
+        self.current_index = 0
+        self.selected_box = -1        # Index of currently selected box for move/resize
+        self.resizing = False
+        self.moving = False
+        self.resize_corner = None     # 'tl', 'tr', 'bl', 'br'
+        self.move_start = (0, 0)      # Mouse position when move started
+
+        # Configure root grid for layout
+        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)  # Canvas column resizable
+
+        # Canvas on left side (row=1, column=0)
+        self.canvas = tk.Canvas(self.root, cursor="cross", bg="black")
+        self.canvas.grid(row=1, column=0, sticky="nsew")
+
+        # Sidebar container on right side (row=1, column=1)
+        sidebar_container = tk.Frame(self.root)
+        sidebar_container.grid(row=1, column=1, sticky="ns")
+
+        # Image list panel inside sidebar
+        image_list_frame = tk.Frame(sidebar_container)
+        image_list_frame.pack(side="top", fill="y", padx=10, pady=10)
+
+        tk.Label(image_list_frame, text="Images").pack()
+        self.sidebar = tk.Listbox(image_list_frame, width=40)
+        self.sidebar.pack(fill="y", expand=True)
+        self.sidebar.bind("<<ListboxSelect>>", self.select_image_from_list)
+
+        # Class controls panel inside sidebar
+        class_control_frame = tk.Frame(sidebar_container)
+        class_control_frame.pack(side="top", fill="y", padx=5, pady=5)
+
+        tk.Label(class_control_frame, text="Classes").pack(pady=(10, 10))
+
+        self.class_combobox = ttk.Combobox(class_control_frame, state="readonly")
+        self.class_combobox.pack(fill="y", padx=5, pady=5)
+        # self.class_combobox.bind("<<ComboboxSelected>>", self.select_class)
+        # self.class_listbox.bind("<<ListboxSelect>>", self.select_class)
+        self.class_combobox.bind("<<ComboboxSelected>>", self.select_class)
+
+
+        # Control bar at the top spanning both columns
+        control_frame = tk.Frame(self.root, bg="#2C2323")
+        control_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        self.class_entry = tk.Entry(control_frame, width=30)
+        self.class_entry.pack(side="right", padx=10, pady=10)
+
+        tk.Button(control_frame, text="Add Class", command=self.add_class).pack(side="right", padx=10, pady=10)
+        tk.Button(control_frame, text="Next", command=self.next_image).pack(side="left", padx=10, pady=10)
+        tk.Button(control_frame, text="Previous", command=self.prev_image).pack(side="left", padx=10, pady=10)
+        tk.Button(control_frame, text="Save ", command=self.save_image).pack(side="left", padx=10, pady=10)
+        tk.Button(control_frame, text="Close", command=self.close_app).pack(side="left", pady=10)
+
+
+        # Bindings for canvas events
+        self.canvas.bind("<Button-1>", self.left_click_start)
+        self.canvas.bind("<B1-Motion>", self.left_click_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.left_click_end)
+        self.canvas.bind("<MouseWheel>", self.zoom)
+        self.canvas.bind("<Button-3>", self.select_box_for_adjustment)
+        self.canvas.bind("<B3-Motion>", self.drag_selected_box)
+        # Assuming self.canvas exists and is your Tkinter Canvas widget
+        self.canvas.bind("<ButtonPress-1>", self.left_mouse_down)
+        self.canvas.bind("<B1-Motion>", self.left_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.left_mouse_up)
+
+        self.canvas.bind("<ButtonPress-3>", self.right_click_start)
+        self.canvas.bind("<B3-Motion>", self.right_click_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.right_click_end)
+
+    def minimize_app(self):
+        self.root.update_idletasks()
+        self.root.overrideredirect(False)
+        self.root.iconify()
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        self.root.attributes("-fullscreen", self.fullscreen)
+
+    def add_class(self):
+        class_name = self.class_entry.get().strip()
+        if not class_name:
+            messagebox.showwarning("Invalid class", "Class name cannot be empty.")
+            return
+        if class_name in self.class_names:
+            messagebox.showinfo("Info", "Class already exists.")
+            return
+        self.class_names.append(class_name)
+        color = self.get_unique_color(len(self.class_names) - 1)
+        self.class_colors[class_name] = color
+
+        # Update combobox values
+        self.class_combobox['values'] = self.class_names
+        self.class_combobox.set(class_name)  # Set to newly added class
+
+        self.class_entry.delete(0, tk.END)
+        self.selected_class = class_name
+
+    def select_class(self, event=None):
+     selected_index = self.class_combobox.current()
+     if selected_index >= 0:
+        self.selected_class = self.class_names[selected_index]
+     else:
+        self.selected_class = None
+
+
+
+    def open_project(self, selected_folder):
+        folder_path = selected_folder
+        if not folder_path:
+            return
+        self.project_folder = folder_path
+        self.image_paths = sorted(
+            glob.glob(os.path.join(folder_path, "*.jpg")) +
+            glob.glob(os.path.join(folder_path, "*.png")) +
+            glob.glob(os.path.join(folder_path, "*.jpeg")) +
+            glob.glob(os.path.join(folder_path, "*.bmp"))
+        )
+        self.sidebar.delete(0, tk.END)
+        for p in self.image_paths:
+            self.sidebar.insert(tk.END, os.path.basename(p))
+        if self.image_paths:
+            self.image_index = 0
+            self.sidebar.selection_set(0)
+            self.load_image()
+
+    def select_image_from_list(self, event):
+        selection = event.widget.curselection()
+        if selection:
+            index = selection[0]
+            self.image_index = index
+            self.load_image()
+
+    def load_image(self):
+     image_path = self.image_paths[self.image_index]
+     self.current_image = Image.open(image_path).convert("RGB")
+     self.scale = 1.0
+     self.offset_x = 0
+     self.offset_y = 0
+     self.bboxes = []  # Clear old boxes
+     self.load_labels()  # Load existing labels if any
+     self.update_display_image()
+
+    def load_labels(self):
+     label_dir = os.path.join(self.project_folder, "labels")
+     image_name = os.path.basename(self.image_paths[self.image_index])
+     label_path = os.path.join(label_dir, os.path.splitext(image_name)[0] + ".txt")
+    
+     self.bboxes = []
+     if os.path.exists(label_path):
+        with open(label_path, "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    class_id, cx, cy, w, h = map(float, parts)
+                    class_id = int(class_id)
+                    class_name = self.class_names[class_id] if class_id < len(self.class_names) else "unknown"
+                    img_w, img_h = self.current_image.size
+                    x1 = (cx - w / 2) * img_w
+                    y1 = (cy - h / 2) * img_h
+                    x2 = (cx + w / 2) * img_w
+                    y2 = (cy + h / 2) * img_h
+                    self.bboxes.append([x1, y1, x2, y2, class_name])
+
+    def update_display_image(self):
+        if not self.current_image:
+            return
+        w, h = int(self.current_image.width * self.scale), int(self.current_image.height * self.scale)
+        resized_img = self.current_image.resize((w, h), Image.LANCZOS)
+        self.tk_image = ImageTk.PhotoImage(resized_img)
+        self.canvas.delete("all")
+        self.canvas.create_image(self.offset_x, self.offset_y, anchor=tk.NW, image=self.tk_image)
+
+        for box in self.bboxes:
+            x1_img, y1_img, x2_img, y2_img, class_name = box
+            x1 = x1_img * self.scale + self.offset_x
+            y1 = y1_img * self.scale + self.offset_y
+            x2 = x2_img * self.scale + self.offset_x
+            y2 = y2_img * self.scale + self.offset_y
+            color = self.class_colors.get(class_name, "white")
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2)
+
+        if self.drawing:
+            x1 = min(self.draw_start_x, self.current_mouse_x)
+            y1 = min(self.draw_start_y, self.current_mouse_y)
+            x2 = max(self.draw_start_x, self.current_mouse_x)
+            y2 = max(self.draw_start_y, self.current_mouse_y)
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="white", width=2, dash=(3, 5))
+
+    def left_click_start(self, event):
+        if not self.selected_class:
+            messagebox.showwarning("No class selected", "Please select a class before labeling.")
+            return
+        self.drawing = True
+        self.draw_start_x = event.x
+        self.draw_start_y = event.y
+        self.current_mouse_x = event.x
+        self.current_mouse_y = event.y
+
+    def left_click_drag(self, event):
+        if self.drawing:
+            self.current_mouse_x = event.x
+            self.current_mouse_y = event.y
+            self.update_display_image()
+
+    def left_click_end(self, event):
+        if not self.drawing:
+            return
+        self.drawing = False
+        x1 = min(self.draw_start_x, event.x)
+        y1 = min(self.draw_start_y, event.y)
+        x2 = max(self.draw_start_x, event.x)
+        y2 = max(self.draw_start_y, event.y)
+
+        x1_img = (x1 - self.offset_x) / self.scale
+        y1_img = (y1 - self.offset_y) / self.scale
+        x2_img = (x2 - self.offset_x) / self.scale
+        y2_img = (y2 - self.offset_y) / self.scale
+
+        x1_img = max(0, min(self.current_image.width, x1_img))
+        y1_img = max(0, min(self.current_image.height, y1_img))
+        x2_img = max(0, min(self.current_image.width, x2_img))
+        y2_img = max(0, min(self.current_image.height, y2_img))
+
+        self.bboxes.append([x1_img, y1_img, x2_img, y2_img, self.selected_class])
+        self.update_display_image()
+
+    def select_box_for_adjustment(self, event):
+        x_img = (event.x - self.offset_x) / self.scale
+        y_img = (event.y - self.offset_y) / self.scale
+        for i, (x1, y1, x2, y2, _) in enumerate(self.bboxes):
+            if x1 <= x_img <= x2 and y1 <= y_img <= y2:
+                self.dragging_box = i
+                self.drag_start_x = event.x
+                self.drag_start_y = event.y
+                return
+        self.dragging_box = None
+
+    def drag_selected_box(self, event):
+        if self.dragging_box is not None:
+            dx = (event.x - self.drag_start_x) / self.scale
+            dy = (event.y - self.drag_start_y) / self.scale
+            x1, y1, x2, y2, class_name = self.bboxes[self.dragging_box]
+
+            x1_new = max(0, min(self.current_image.width, x1 + dx))
+            y1_new = max(0, min(self.current_image.height, y1 + dy))
+            x2_new = max(0, min(self.current_image.width, x2 + dx))
+            y2_new = max(0, min(self.current_image.height, y2 + dy))
+
+            self.bboxes[self.dragging_box] = [x1_new, y1_new, x2_new, y2_new, class_name]
+            self.drag_start_x = event.x
+            self.drag_start_y = event.y
+            self.update_display_image()
+   
+
+    def right_click_start(self, event):
+     if not hasattr(self, "selected_class") or self.selected_class is None:
+        messagebox.showwarning("Warning", "Please select a class before labeling.")
+        return
+     self.drawing = True
+     self.draw_start_x = event.x
+     self.draw_start_y = event.y
+     self.current_mouse_x = event.x
+     self.current_mouse_y = event.y
+
+
+    def right_click_drag(self, event):
+     if self.drawing:
+        self.current_mouse_x = event.x
+        self.current_mouse_y = event.y
+        self.update_display_image()
+
+    def right_click_end(self, event):
+     if not self.drawing:
+        return
+     self.drawing = False
+     x1 = min(self.draw_start_x, event.x)
+     y1 = min(self.draw_start_y, event.y)
+     x2 = max(self.draw_start_x, event.x)
+     y2 = max(self.draw_start_y, event.y)
+
+     x1_img = (x1 - self.offset_x) / self.scale
+     y1_img = (y1 - self.offset_y) / self.scale
+     x2_img = (x2 - self.offset_x) / self.scale
+     y2_img = (y2 - self.offset_y) / self.scale
+
+     x1_img = max(0, min(self.current_image.width, x1_img))
+     y1_img = max(0, min(self.current_image.height, y1_img))
+     x2_img = max(0, min(self.current_image.width, x2_img))
+     y2_img = max(0, min(self.current_image.height, y2_img))
+
+     # Assign a default class if you want, or use selected class
+     class_name = self.selected_class if hasattr(self, 'selected_class') else "default"
+
+     self.bboxes.append([x1_img, y1_img, x2_img, y2_img, class_name])
+     self.update_display_image()
+
+
+     # Left mouse down: select box for move/resize
+    def left_mouse_down(self, event):
+     x, y = event.x, event.y
+     self.selected_box = -1
+     self.resizing = False
+     self.moving = False
+     self.resize_corner = None
+     for i, (x1, y1, x2, y2, _) in enumerate(self.bboxes):
+        sx1 = x1 * self.scale + self.offset_x
+        sy1 = y1 * self.scale + self.offset_y
+        sx2 = x2 * self.scale + self.offset_x
+        sy2 = y2 * self.scale + self.offset_y
+        # Check corners for resize (6 px tolerance)
+        corners = {
+            'tl': (sx1, sy1), 'tr': (sx2, sy1),
+            'bl': (sx1, sy2), 'br': (sx2, sy2)
+        }
+        for corner_name, (cx, cy) in corners.items():
+            if abs(x - cx) <= 6 and abs(y - cy) <= 6:
+                self.selected_box = i
+                self.resize_corner = corner_name
+                self.resizing = True
+                return
+        # Check if inside box for move
+        if sx1 <= x <= sx2 and sy1 <= y <= sy2:
+            self.selected_box = i
+            self.moving = True
+            self.move_start = (x, y)
+            return
+
+    # Left mouse drag: move or resize selected box
+    def left_mouse_drag(self, event):
+     if self.selected_box == -1:
+        return
+
+     x = (event.x - self.offset_x) / self.scale
+     y = (event.y - self.offset_y) / self.scale
+
+     if self.resizing:
+        x1, y1, x2, y2, class_name = self.bboxes[self.selected_box]
+        if self.resize_corner == 'tl':
+            self.bboxes[self.selected_box] = [x, y, x2, y2, class_name]
+        elif self.resize_corner == 'tr':
+            self.bboxes[self.selected_box] = [x1, y, x, y2, class_name]
+        elif self.resize_corner == 'bl':
+            self.bboxes[self.selected_box] = [x, y1, x2, y, class_name]
+        elif self.resize_corner == 'br':
+            self.bboxes[self.selected_box] = [x1, y1, x, y, class_name]
+        self.update_display_image()
+     elif self.moving:
+        dx = (event.x - self.move_start[0]) / self.scale
+        dy = (event.y - self.move_start[1]) / self.scale
+        x1, y1, x2, y2, class_name = self.bboxes[self.selected_box]
+        self.bboxes[self.selected_box] = [x1 + dx, y1 + dy, x2 + dx, y2 + dy, class_name]
+        self.move_start = (event.x, event.y)
+        self.update_display_image()
+
+    # Left mouse up: reset flags
+    def left_mouse_up(self, event):
+     self.selected_box = -1
+     self.resizing = False
+     self.moving = False
+     self.resize_corner = None
+
+    def zoom(self, event):
+        old_scale = self.scale
+        # Zoom factor: zoom in if event.delta > 0 else zoom out
+        zoom_factor = 1.1 if event.delta > 0 else 0.9
+        new_scale = self.scale * zoom_factor
+        new_scale = max(0.1, min(5, new_scale))  # Clamp scale
+
+        # Calculate mouse position on image before zoom
+        mouse_x = event.x
+        mouse_y = event.y
+        image_x = (mouse_x - self.offset_x) / old_scale
+        image_y = (mouse_y - self.offset_y) / old_scale
+
+        # Update offset to keep image point under mouse static after zoom
+        self.offset_x = mouse_x - image_x * new_scale
+        self.offset_y = mouse_y - image_y * new_scale
+
+        self.scale = new_scale
+
+        # Optional: prevent image from moving out of canvas bounds (keep visible)
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        img_width = self.current_image.width * self.scale
+        img_height = self.current_image.height * self.scale
+
+        # Clamp offset_x
+        if img_width < canvas_width:
+            # Center if smaller than canvas
+            self.offset_x = (canvas_width - img_width) / 2
+        else:
+            self.offset_x = min(0, max(self.offset_x, canvas_width - img_width))
+
+        # Clamp offset_y
+        if img_height < canvas_height:
+            # Center if smaller than canvas
+            self.offset_y = (canvas_height - img_height) / 2
+        else:
+            self.offset_y = min(0, max(self.offset_y, canvas_height - img_height))
+
+        self.update_display_image()
+
+    def save_image(self):
+        self.save_labels()
+        self.image_index += 1
+        if self.image_index < len(self.image_paths):
+            self.sidebar.select_clear(0, tk.END)
+            # self.sidebar.select_set(self.image_index)
+            # self.load_image()
+        else:
+            messagebox.showinfo("Done", "All images labeled!")
+            self.root.quit()
+    
+    def close_app(self):
+       self.root.destroy()  # or self.quit() if you inherit from Tk
+
+    def next_image(self):
+     self.save_labels()  # Save current image's labels before moving
+     if self.image_index < len(self.image_paths) - 1:
+        self.image_index += 1
+        self.load_image()
+
+    def prev_image(self):
+     self.save_labels()  # Save current image's labels before moving
+     if self.image_index > 0:
+        self.image_index -= 1
+        self.load_image()
+
+
+    def load_images_from_folder(self, folder_path):
+     self.image_list = glob(os.path.join(folder_path, "*.jpg")) + glob(os.path.join(folder_path, "*.bmp"))
+     self.image_list.sort()
+     if self.image_list:
+        self.current_index = 0
+        self.load_image(self.image_list[self.current_index])
+     else:
+        print("No images found.")
+
+    def save_labels(self):
+     label_dir = os.path.join(self.project_folder, "Detection_labels")
+     os.makedirs(label_dir, exist_ok=True)
+     image_name = os.path.basename(self.image_paths[self.image_index])
+     label_path = os.path.join(label_dir, os.path.splitext(image_name)[0] + ".txt")
+     img_w, img_h = self.current_image.size
+
+     with open(label_path, "w") as f:
+        for x1, y1, x2, y2, class_name in self.bboxes:
+            if class_name is None or class_name not in self.class_names:
+                print(f"Skipping box with no class: ({x1}, {y1}, {x2}, {y2})")
+                continue
+            cx = (x1 + x2) / 2 / img_w
+            cy = (y1 + y2) / 2 / img_h
+            w = (x2 - x1) / img_w
+            h = (y2 - y1) / img_h
+            class_id = self.class_names.index(class_name)
+            f.write(f"{class_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+
+    def get_unique_color(self, idx):
+        colors = ["green", "red", "blue", "yellow", "orange", "purple", "cyan", "magenta",
+                  "#FF4500", "#00CED1", "#9400D3", "#FFD700"]
+        return colors[idx % len(colors)]
+
+
+def launch_labeling_app(selected_folder):
+    root = tk.Tk()
+    app = ImageLabeler(root, selected_folder)
+    app.open_project(selected_folder)  # 👈 Call the function here
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        selected_folder = sys.argv[1]
+        launch_labeling_app(selected_folder)
+    else:
+        print("❌ Error: No folder path provided to basic_label.py")

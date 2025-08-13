@@ -253,17 +253,6 @@ class SegmentationLabeler:
             self.image_index += 1
             self.load_image()
 
-
-# Only run GUI if launched with folder path
-# if __name__ == "__main__":
-#     if len(sys.argv) < 2:
-#         print("Usage: python Segment_label.py <image_folder_path>")
-#     else:
-#         folder = sys.argv[1]
-#         root = tk.Tk()
-#         app = SegmentationLabeler(root, folder)
-#         root.mainloop()
-
 pass
 def run_segment_label(folder):
     root = tk.Tk()

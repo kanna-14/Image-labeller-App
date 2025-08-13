@@ -1,6 +1,7 @@
-('D:\\Kanna Reddinagesh\\AI training\\Labeller\\build\\main_app\\PYZ-00.pyz',
+('D:\\Kanna Reddinagesh\\AI training\\Labeller 1208 '
+ '2\\build\\Main_app\\PYZ-00.pyz',
  [('Bounding_box',
-   'D:\\Kanna Reddinagesh\\AI training\\Labeller\\Bounding_box.py',
+   'D:\\Kanna Reddinagesh\\AI training\\Labeller 1208 2\\Bounding_box.py',
    'PYMODULE'),
   ('PIL',
    'C:\\Users\\Sampreeth '
@@ -307,7 +308,7 @@
    'Raghu\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PIL\\features.py',
    'PYMODULE'),
   ('Segment_label',
-   'D:\\Kanna Reddinagesh\\AI training\\Labeller\\Segment_label.py',
+   'D:\\Kanna Reddinagesh\\AI training\\Labeller 1208 2\\Segment_label.py',
    'PYMODULE'),
   ('__future__',
    'C:\\Users\\Sampreeth '
@@ -880,6 +881,9 @@
   ('logging.handlers',
    'C:\\Users\\Sampreeth '
    'Raghu\\AppData\\Local\\Programs\\Python\\Python310\\lib\\logging\\handlers.py',
+   'PYMODULE'),
+  ('login_page',
+   'D:\\Kanna Reddinagesh\\AI training\\Labeller 1208 2\\login_page.py',
    'PYMODULE'),
   ('lzma',
    'C:\\Users\\Sampreeth '
@@ -1764,6 +1768,10 @@
   ('tkinter',
    'C:\\Users\\Sampreeth '
    'Raghu\\AppData\\Local\\Programs\\Python\\Python310\\lib\\tkinter\\__init__.py',
+   'PYMODULE'),
+  ('tkinter.colorchooser',
+   'C:\\Users\\Sampreeth '
+   'Raghu\\AppData\\Local\\Programs\\Python\\Python310\\lib\\tkinter\\colorchooser.py',
    'PYMODULE'),
   ('tkinter.commondialog',
    'C:\\Users\\Sampreeth '
